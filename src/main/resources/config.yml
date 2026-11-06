@@ -1,0 +1,34 @@
+debit-card:
+  material: PAPER
+  name: "ZipBank Debit Card"
+  # Set an integer for a resource-pack model, or leave null for the default model.
+  custom-model-data: null
+
+cash:
+  coin-1:
+    name: "1 Cent"
+    custom-model-data: 1001
+  coin-10:
+    name: "10 Cents"
+    custom-model-data: 1010
+  coin-25:
+    name: "25 Cents"
+    custom-model-data: 1025
+  coin-50:
+    name: "50 Cents"
+    custom-model-data: 1050
+  bill-1:
+    name: "1 Dollar"
+    custom-model-data: 2001
+  bill-5:
+    name: "5 Dollars"
+    custom-model-data: 2005
+  bill-10:
+    name: "10 Dollars"
+    custom-model-data: 2010
+  bill-20:
+    name: "20 Dollars"
+    custom-model-data: 2020
+  bill-100:
+    name: "100 Dollars"
+    custom-model-data: 2100

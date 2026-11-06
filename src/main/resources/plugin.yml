@@ -1,0 +1,19 @@
+name: ZipBank
+version: 1.0.0
+main: com.zipbank.ZipBankPlugin
+api-version: '26.3'
+depend: [Vault]
+commands:
+  zippay:
+    description: Manage checkout payments, IDs, and your cash wallet.
+    usage: /zippay wallet | /zippay <charge|refund> <amount> <id> | /zippay <cancel|assign> <id>
+permissions:
+  zipbank.atm.create:
+    description: Create ZipATM signs.
+    default: op
+  zipbank.pay.create:
+    description: Create ZipPay checkout signs.
+    default: true
+  zipbank.admin:
+    description: Remove another player's checkout sign.
+    default: op
