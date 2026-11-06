@@ -25,6 +25,9 @@ import org.bukkit.event.EventHandler;
 import org.bukkit.event.EventPriority;
 import org.bukkit.event.Listener;
 import org.bukkit.event.player.PlayerInteractEntityEvent;
+import org.bukkit.event.server.MapInitializeEvent;
+import org.bukkit.event.world.EntitiesLoadEvent;
+import org.bukkit.entity.Entity;
 import org.bukkit.event.player.PlayerInteractEvent;
 import org.bukkit.event.block.Action;
 import org.bukkit.event.hanging.HangingPlaceEvent;
@@ -55,6 +58,7 @@ final class ShopCheckout implements Listener {
     private final NamespacedKey displayKey;
     private final Map<UUID, Cart> carts = new HashMap<>();
     private final Map<UUID, String> frames = new HashMap<>();
+    private final Map<Integer, String> mapLocations = new HashMap<>();
     final Map<UUID, String> pendingIds = new HashMap<>();
 
     private record Line(String name, int count, long total) { }
@@ -99,8 +103,7 @@ final class ShopCheckout implements Listener {
         displayKey = new NamespacedKey(plugin, "shop-display");
         for (Map.Entry<String, Integer> entry : store.shopMaps().entrySet()) {
             BankStore.Shop shop = store.shop(entry.getKey());
-            MapView map = Bukkit.getMap(entry.getValue());
-            if (shop == null || shop.frame() == null || map == null) {
+            if (shop == null || shop.frame() == null) {
                 plugin.getLogger().warning("Shop display unavailable at " + entry.getKey() + "; set it up again.");
                 continue;
             }
@@ -110,7 +113,36 @@ final class ShopCheckout implements Listener {
                 plugin.getLogger().warning("Invalid shop frame ID at " + entry.getKey() + "; set it up again.");
                 continue;
             }
-            installRenderer(map, entry.getKey());
+            mapLocations.put(entry.getValue(), entry.getKey());
+            MapView map = Bukkit.getMap(entry.getValue());
+            if (map != null) installRenderer(map, entry.getKey());
+        }
+    }
+
+    // Maps load lazily after restart, so renderers are reattached when each one initializes.
+    @EventHandler
+    public void onMapInit(MapInitializeEvent event) {
+        String location = mapLocations.get(event.getMap().getId());
+        if (location != null) installRenderer(event.getMap(), location);
+    }
+
+    @EventHandler
+    public void onEntitiesLoad(EntitiesLoadEvent event) {
+        for (Entity entity : event.getEntities()) {
+            if (entity instanceof ItemFrame frame && frames.containsKey(frame.getUniqueId())) lockFrame(frame);
+        }
+    }
+
+    private void lockFrame(ItemFrame frame) {
+        frame.setFixed(true);
+        frame.setCustomNameVisible(false);
+        frame.setCustomName(null);
+        ItemStack item = frame.getItem();
+        if (item.getItemMeta() instanceof MapMeta meta && (meta.hasDisplayName() || meta.hasLore())) {
+            meta.displayName(null);
+            meta.lore(null);
+            item.setItemMeta(meta);
+            frame.setItem(item);
         }
     }
 
@@ -392,6 +424,7 @@ final class ShopCheckout implements Listener {
         }
         installRenderer(map, location);
         frames.put(frame.getUniqueId(), location);
+        mapLocations.put(map.getId(), location);
         ItemStack displayItem = mapItem.clone();
         MapMeta displayMeta = (MapMeta) displayItem.getItemMeta();
         displayMeta.displayName(null);
@@ -680,6 +713,7 @@ final class ShopCheckout implements Listener {
 
     void remove(String location) {
         frames.values().removeIf(location::equals);
+        mapLocations.values().removeIf(location::equals);
         carts.values().removeIf(cart -> cart.location.equals(location));
     }
 
