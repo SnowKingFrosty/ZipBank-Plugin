@@ -119,6 +119,20 @@ public final class ZipBankPlugin extends JavaPlugin implements Listener {
         }
     }
 
+    private static final class HistoryHolder implements InventoryHolder {
+        private final UUID owner;
+        private Inventory inventory;
+
+        private HistoryHolder(UUID owner) {
+            this.owner = owner;
+        }
+
+        @Override
+        public Inventory getInventory() {
+            return inventory;
+        }
+    }
+
     @Override
     public void onEnable() {
         RegisteredServiceProvider<Economy> provider = getServer().getServicesManager().getRegistration(Economy.class);
@@ -358,6 +372,7 @@ public final class ZipBankPlugin extends JavaPlugin implements Listener {
             holder.inventory.setItem(14, button(Material.IRON_INGOT, "Deposit Cash", "Deposit all cash in your inventory"));
             holder.inventory.setItem(16, button(Material.IRON_NUGGET, "Withdraw Cash", "Withdraw bank money as cash"));
             holder.inventory.setItem(22, button(Material.PAPER, "Get Debit Card", "Receive a uniquely identified card"));
+            holder.inventory.setItem(24, button(Material.BOOK, "Transaction History", "View your recent transactions"));
         }
         player.openInventory(holder.inventory);
     }
@@ -369,6 +384,43 @@ public final class ZipBankPlugin extends JavaPlugin implements Listener {
         meta.lore(java.util.List.of(Component.text(description)));
         item.setItemMeta(meta);
         return item;
+    }
+
+    private void openTransactionHistory(Player player) throws SQLException {
+        java.util.List<BankStore.Transaction> transactions = store.getTransactionHistory(player.getUniqueId(), 28);
+        HistoryHolder holder = new HistoryHolder(player.getUniqueId());
+        holder.inventory = Bukkit.createInventory(holder, 36, Component.text("Transaction History"));
+        
+        for (int i = 0; i < transactions.size() && i < 28; i++) {
+            BankStore.Transaction tx = transactions.get(i);
+            ItemStack item = new ItemStack(Material.PAPER);
+            ItemMeta meta = item.getItemMeta();
+            
+            String sign = tx.amount() > 0 ? "+" : "";
+            meta.displayName(Component.text(tx.type()));
+            
+            java.time.LocalDateTime dt = java.time.LocalDateTime.ofInstant(
+                java.time.Instant.ofEpochMilli(tx.timestamp()),
+                java.time.ZoneId.systemDefault()
+            );
+            String timeStr = dt.format(java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss"));
+            
+            java.util.List<Component> lore = java.util.List.of(
+                Component.text(timeStr),
+                Component.text("Amount: " + sign + Money.format(tx.amount())),
+                Component.text("Balance: " + Money.format(tx.balanceAfter()))
+            );
+            meta.lore(lore);
+            item.setItemMeta(meta);
+            holder.inventory.setItem(i, item);
+        }
+        
+        for (int slot = 28; slot < 35; slot++) {
+            holder.inventory.setItem(slot, button(Material.GRAY_STAINED_GLASS_PANE, " ", " "));
+        }
+        holder.inventory.setItem(35, button(Material.ARROW, "Back", "Return to ATM"));
+        
+        player.openInventory(holder.inventory);
     }
 
     private void openWallet(Player player) throws SQLException {
@@ -692,7 +744,7 @@ public final class ZipBankPlugin extends JavaPlugin implements Listener {
     @EventHandler
     public void onInventoryClick(InventoryClickEvent event) {
         InventoryHolder inventoryHolder = event.getView().getTopInventory().getHolder();
-        if (!(inventoryHolder instanceof AtmHolder) && !(inventoryHolder instanceof KeypadHolder)) {
+        if (!(inventoryHolder instanceof AtmHolder) && !(inventoryHolder instanceof KeypadHolder) && !(inventoryHolder instanceof HistoryHolder)) {
             return;
         }
         event.setCancelled(true);
@@ -701,6 +753,21 @@ public final class ZipBankPlugin extends JavaPlugin implements Listener {
             return;
         }
         try {
+            if (inventoryHolder instanceof HistoryHolder history) {
+                if (event.getRawSlot() == 35) {
+                    player.closeInventory();
+                    getServer().getScheduler().runTask(this, () -> {
+                        if (player.isOnline()) {
+                            try {
+                                openAtm(player);
+                            } catch (SQLException exception) {
+                                error(player, exception);
+                            }
+                        }
+                    });
+                }
+                return;
+            }
             if (inventoryHolder instanceof KeypadHolder keypad) {
                 clickKeypad(player, keypad, event.getRawSlot());
                 return;
@@ -758,6 +825,16 @@ public final class ZipBankPlugin extends JavaPlugin implements Listener {
                         player.sendMessage(ChatColor.YELLOW + "Enter a four-digit PIN in chat for your new card, or type cancel.");
                     }
                 });
+            } else if (balance != null && event.getRawSlot() == 24) {
+                getServer().getScheduler().runTask(this, () -> {
+                    if (player.isOnline()) {
+                        try {
+                            openTransactionHistory(player);
+                        } catch (SQLException exception) {
+                            error(player, exception);
+                        }
+                    }
+                });
             }
         } catch (SQLException exception) {
             error(player, exception);
@@ -768,7 +845,8 @@ public final class ZipBankPlugin extends JavaPlugin implements Listener {
     public void onInventoryDrag(InventoryDragEvent event) {
         if (event.getView().getTopInventory().getHolder() instanceof AtmHolder
             || event.getView().getTopInventory().getHolder() instanceof KeypadHolder
-            || event.getView().getTopInventory().getHolder() instanceof WalletHolder) {
+            || event.getView().getTopInventory().getHolder() instanceof WalletHolder
+            || event.getView().getTopInventory().getHolder() instanceof HistoryHolder) {
             event.setCancelled(true);
         }
     }
@@ -883,6 +961,7 @@ public final class ZipBankPlugin extends JavaPlugin implements Listener {
                 player.sendMessage(ChatColor.RED + "Your bank account cannot accept that cash deposit.");
                 return;
             }
+            store.logTransaction(player.getUniqueId(), "Cash Deposit", amount);
         } catch (SQLException exception) {
             player.getInventory().setStorageContents(original);
             throw exception;
@@ -906,6 +985,7 @@ public final class ZipBankPlugin extends JavaPlugin implements Listener {
         }
         try {
             player.getInventory().setStorageContents(withCash);
+            store.logTransaction(player.getUniqueId(), "Cash Withdrawal", -amount);
         } catch (RuntimeException exception) {
             try {
                 if (!store.changeBalance(player.getUniqueId(), amount)) {
@@ -1008,6 +1088,7 @@ public final class ZipBankPlugin extends JavaPlugin implements Listener {
                 if (!store.changeBalance(owner, amount)) {
                     throw new SQLException("Could not credit bank account");
                 }
+                store.logTransaction(owner, "Vault Deposit", amount);
             } catch (SQLException exception) {
                 EconomyResponse reversal = economy.depositPlayer(player, value);
                 if (!reversal.transactionSuccess()) {
@@ -1033,6 +1114,7 @@ public final class ZipBankPlugin extends JavaPlugin implements Listener {
                 player.sendMessage(ChatColor.RED + "Wallet deposit failed: " + response.errorMessage);
                 return;
             }
+            store.logTransaction(owner, "Vault Withdrawal", -amount);
         }
         player.sendMessage(ChatColor.GREEN + "Transfer complete: " + Money.format(amount) + ".");
     }

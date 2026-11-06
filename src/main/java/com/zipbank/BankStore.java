@@ -16,6 +16,7 @@ final class BankStore implements AutoCloseable {
 
     record Terminal(UUID owner, long pending, String token) { }
     record WalletCard(UUID id, byte[] item) { }
+    record Transaction(long id, long timestamp, String type, long amount, long balanceAfter) { }
     enum PinResult { OK, INVALID, LOCKED, UNSET, NOT_FOUND }
 
     BankStore(String url) throws SQLException {
@@ -32,6 +33,7 @@ final class BankStore implements AutoCloseable {
             statement.execute("CREATE TABLE IF NOT EXISTS cash_wallet (owner TEXT NOT NULL, denomination INTEGER NOT NULL, quantity INTEGER NOT NULL CHECK(quantity >= 0), PRIMARY KEY(owner, denomination))");
             statement.execute("CREATE TABLE IF NOT EXISTS wallet_card (owner TEXT PRIMARY KEY, card_id TEXT NOT NULL UNIQUE REFERENCES cards(id), item BLOB NOT NULL)");
             statement.execute("CREATE TABLE IF NOT EXISTS terminals (location TEXT PRIMARY KEY, owner TEXT NOT NULL REFERENCES accounts(owner), pending INTEGER NOT NULL DEFAULT 0, checkout_id TEXT)");
+            statement.execute("CREATE TABLE IF NOT EXISTS transactions (id INTEGER PRIMARY KEY AUTOINCREMENT, owner TEXT NOT NULL REFERENCES accounts(owner), timestamp INTEGER NOT NULL, type TEXT NOT NULL, amount INTEGER NOT NULL, balance_after INTEGER NOT NULL)");
             boolean hasCheckoutId = false;
             try (ResultSet columns = statement.executeQuery("PRAGMA table_info(terminals)")) {
                 while (columns.next()) {
@@ -347,6 +349,41 @@ final class BankStore implements AutoCloseable {
         } finally {
             connection.setAutoCommit(true);
         }
+    }
+
+    void logTransaction(UUID owner, String type, long amount) throws SQLException {
+        Long balance = balance(owner);
+        if (balance == null) return;
+        try (PreparedStatement statement = connection.prepareStatement(
+                "INSERT INTO transactions (owner, timestamp, type, amount, balance_after) VALUES (?, ?, ?, ?, ?)")) {
+            statement.setString(1, owner.toString());
+            statement.setLong(2, System.currentTimeMillis());
+            statement.setString(3, type);
+            statement.setLong(4, amount);
+            statement.setLong(5, balance);
+            statement.executeUpdate();
+        }
+    }
+
+    java.util.List<Transaction> getTransactionHistory(UUID owner, int limit) throws SQLException {
+        java.util.List<Transaction> transactions = new java.util.ArrayList<>();
+        try (PreparedStatement statement = connection.prepareStatement(
+                "SELECT id, timestamp, type, amount, balance_after FROM transactions WHERE owner = ? ORDER BY id DESC LIMIT ?")) {
+            statement.setString(1, owner.toString());
+            statement.setInt(2, limit);
+            try (ResultSet result = statement.executeQuery()) {
+                while (result.next()) {
+                    transactions.add(new Transaction(
+                            result.getLong(1),
+                            result.getLong(2),
+                            result.getString(3),
+                            result.getLong(4),
+                            result.getLong(5)
+                    ));
+                }
+            }
+        }
+        return transactions;
     }
 
     @Override
