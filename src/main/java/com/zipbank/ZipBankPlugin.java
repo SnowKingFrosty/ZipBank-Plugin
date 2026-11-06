@@ -8,6 +8,8 @@ import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import net.kyori.adventure.text.Component;
+import net.kyori.adventure.text.format.NamedTextColor;
+import net.kyori.adventure.text.format.TextDecoration;
 import net.kyori.adventure.text.serializer.legacy.LegacyComponentSerializer;
 import net.kyori.adventure.text.serializer.plain.PlainTextComponentSerializer;
 import net.milkbowl.vault.economy.Economy;
@@ -57,9 +59,10 @@ public final class ZipBankPlugin extends JavaPlugin implements Listener {
     private Component cardName;
     private Integer cardModelData;
     private CashItems cashItems;
+    private ShopCheckout shops;
 
     private enum Transfer { DEPOSIT, WITHDRAW }
-    private enum PromptType { CHECKOUT_ID_PENDING, CHECKOUT_ID, NEW_CARD_PIN, EXISTING_CARD_PIN }
+    private enum PromptType { CHECKOUT_ID_PENDING, CHECKOUT_ID, SHOP_ID_PENDING, SHOP_ID, SHOP_READER, NEW_CARD_PIN, EXISTING_CARD_PIN }
     private record Prompt(PromptType type, String checkoutLocation, UUID card) { }
     private record Payment(String location, UUID card, BankStore.Terminal terminal) { }
     private static final class CashSelection {
@@ -175,12 +178,14 @@ public final class ZipBankPlugin extends JavaPlugin implements Listener {
         }
         try {
             store = new BankStore("jdbc:sqlite:" + new File(getDataFolder(), "zipbank.db").getAbsolutePath());
+            shops = new ShopCheckout(this, store);
         } catch (SQLException exception) {
             getLogger().severe("Could not open bank database: " + exception.getMessage());
             getServer().getPluginManager().disablePlugin(this);
             return;
         }
         getServer().getPluginManager().registerEvents(this, this);
+        getServer().getPluginManager().registerEvents(shops, this);
     }
 
     @Override
@@ -194,15 +199,15 @@ public final class ZipBankPlugin extends JavaPlugin implements Listener {
         }
     }
 
-    private static String text(Component component) {
+    static String text(Component component) {
         return component == null ? "" : PlainTextComponentSerializer.plainText().serialize(component);
     }
 
-    private static String location(Block block) {
+    static String location(Block block) {
         return block.getWorld().getUID() + ":" + block.getX() + ":" + block.getY() + ":" + block.getZ();
     }
 
-    private void error(Player player, Exception exception) {
+    void error(Player player, Exception exception) {
         getLogger().severe("Bank operation failed: " + exception.getMessage());
         player.sendMessage(ChatColor.RED + "The bank could not complete that operation. Contact an administrator.");
     }
@@ -214,7 +219,7 @@ public final class ZipBankPlugin extends JavaPlugin implements Listener {
         }
         Player player = event.getPlayer();
         try {
-            if (store.terminal(location(event.getBlock())) != null) {
+            if (store.terminal(location(event.getBlock())) != null || store.shop(location(event.getBlock())) != null) {
                 event.setCancelled(true);
                 player.sendMessage(ChatColor.RED + "Break the checkout sign to remove it.");
                 return;
@@ -226,8 +231,46 @@ public final class ZipBankPlugin extends JavaPlugin implements Listener {
                     player.sendMessage(ChatColor.RED + "You cannot create ATM signs.");
                     return;
                 }
-                event.line(0, Component.text("[ZipATM]"));
+                event.line(0, Component.text("[ZipATM]", NamedTextColor.GOLD, TextDecoration.BOLD));
                 player.sendMessage(ChatColor.GREEN + "ATM created.");
+            } else if (header.equalsIgnoreCase("[ZipShop]")) {
+                if (!player.hasPermission("zipbank.pay.create") || store.balance(player.getUniqueId()) == null) {
+                    event.setCancelled(true);
+                    player.sendMessage(ChatColor.RED + "You need checkout creation permission and a bank account.");
+                } else {
+                    Prompt prompt = new Prompt(PromptType.SHOP_ID_PENDING, location(event.getBlock()), null);
+                    if (prompts.putIfAbsent(player.getUniqueId(), prompt) != null) {
+                        event.setCancelled(true);
+                        player.sendMessage(ChatColor.RED + "Finish or cancel your current chat prompt first.");
+                        return;
+                    }
+                    event.line(0, Component.text("[ZipShop]", NamedTextColor.DARK_GREEN, TextDecoration.BOLD));
+                    event.line(1, Component.text("Scan items", NamedTextColor.DARK_BLUE));
+                    event.line(2, Component.empty());
+                    event.line(3, Component.empty());
+                    getServer().getScheduler().runTask(this, () -> {
+                        if (event.isCancelled() || !(event.getBlock().getState() instanceof Sign sign)
+                                || !text(sign.getSide(Side.FRONT).line(0)).equals("[ZipShop]")) {
+                            prompts.remove(player.getUniqueId(), prompt);
+                            return;
+                        }
+                        try {
+                            if (!store.registerShop(prompt.checkoutLocation(), player.getUniqueId())) {
+                                prompts.remove(player.getUniqueId(), prompt);
+                                player.sendMessage(ChatColor.RED + "Could not register this shop sign.");
+                            } else if (player.isOnline()) {
+                                shops.giveDisplay(player, prompt.checkoutLocation());
+                                if (prompts.replace(player.getUniqueId(), prompt,
+                                        new Prompt(PromptType.SHOP_ID, prompt.checkoutLocation(), null))) {
+                                    player.sendMessage(ChatColor.YELLOW + "Enter a shop checkout ID in chat, or type cancel.");
+                                }
+                            }
+                        } catch (SQLException exception) {
+                            prompts.remove(player.getUniqueId(), prompt);
+                            error(player, exception);
+                        }
+                    });
+                }
             } else if (header.equalsIgnoreCase("[ZipPay]")) {
                 if (!player.hasPermission("zipbank.pay.create")) {
                     event.setCancelled(true);
@@ -245,8 +288,8 @@ public final class ZipBankPlugin extends JavaPlugin implements Listener {
                         player.sendMessage(ChatColor.RED + "Finish or cancel your current chat prompt first.");
                         return;
                     }
-                    event.line(0, Component.text("[ZipPay]"));
-                    event.line(1, Component.text("Tap Card Here"));
+                    event.line(0, Component.text("[ZipPay]", NamedTextColor.DARK_AQUA, TextDecoration.BOLD));
+                    event.line(1, Component.text("Tap Card Here", NamedTextColor.DARK_BLUE));
                     event.line(2, Component.empty());
                     event.line(3, Component.empty());
                     getServer().getScheduler().runTask(this, () -> {
@@ -282,7 +325,9 @@ public final class ZipBankPlugin extends JavaPlugin implements Listener {
     public void onBreak(BlockBreakEvent event) {
         try {
             BankStore.Terminal terminal = store.terminal(location(event.getBlock()));
-            if (terminal != null && !terminal.owner().equals(event.getPlayer().getUniqueId())
+            BankStore.Shop shop = store.shop(location(event.getBlock()));
+            UUID owner = terminal != null ? terminal.owner() : shop != null ? shop.owner() : null;
+            if (owner != null && !owner.equals(event.getPlayer().getUniqueId())
                     && !event.getPlayer().hasPermission("zipbank.admin")) {
                 event.setCancelled(true);
                 event.getPlayer().sendMessage(ChatColor.RED + "Only the checkout owner can break this sign.");
@@ -324,6 +369,8 @@ public final class ZipBankPlugin extends JavaPlugin implements Listener {
     private void removeTerminal(Block block) {
         try {
             store.removeTerminal(location(block));
+            store.removeShop(location(block));
+            shops.remove(location(block));
         } catch (SQLException exception) {
             getLogger().severe("Could not remove checkout: " + exception.getMessage());
         }
@@ -343,7 +390,11 @@ public final class ZipBankPlugin extends JavaPlugin implements Listener {
                 store.removeTerminal(location(block));
                 terminal = null;
             }
-            if (terminal != null) {
+            BankStore.Shop shop = store.shop(location(block));
+            if (shop != null) {
+                event.setCancelled(true);
+                shops.scan(player, block, sign, shop, event.getItem());
+            } else if (terminal != null) {
                 event.setCancelled(true);
                 long cashValue = cashItems.value(event.getItem());
                 if (cashValue != 0) {
@@ -859,7 +910,7 @@ public final class ZipBankPlugin extends JavaPlugin implements Listener {
             return;
         }
         event.setCancelled(true);
-        if (prompt.type() == PromptType.CHECKOUT_ID_PENDING) {
+        if (prompt.type() == PromptType.CHECKOUT_ID_PENDING || prompt.type() == PromptType.SHOP_ID_PENDING) {
             getServer().getScheduler().runTask(this, () -> event.getPlayer().sendMessage(ChatColor.YELLOW + "Wait for the checkout ID prompt."));
             return;
         }
@@ -870,14 +921,37 @@ public final class ZipBankPlugin extends JavaPlugin implements Listener {
                 return;
             }
             if (input.equalsIgnoreCase("cancel")) {
+                shops.pendingIds.remove(player.getUniqueId());
                 player.sendMessage(ChatColor.YELLOW + (prompt.type() == PromptType.CHECKOUT_ID
-                        ? "Checkout ID assignment cancelled. Look at the sign and use /zippay assign <id> later." : "Card PIN setup cancelled."));
+                        ? "Checkout ID assignment cancelled. Look at the sign and use /zippay assign <id> later."
+                        : prompt.type() == PromptType.SHOP_ID || prompt.type() == PromptType.SHOP_READER
+                        ? "Shop setup cancelled. Look at the sign and use /zipshop setup <id> <reader-id> later."
+                        : "Card PIN setup cancelled."));
                 return;
             }
             try {
                 if (prompt.type() == PromptType.CHECKOUT_ID) {
                     if (!assignCheckout(player, prompt.checkoutLocation(), input)) {
                         prompts.putIfAbsent(player.getUniqueId(), prompt);
+                    }
+                } else if (prompt.type() == PromptType.SHOP_ID) {
+                    if (!shops.validId(input)) {
+                        player.sendMessage(ChatColor.RED + "ID must be 1-16 letters, numbers, underscores or hyphens, and cannot be cancel.");
+                        prompts.putIfAbsent(player.getUniqueId(), prompt);
+                    } else if (store.shopLocation(player.getUniqueId(), input) != null) {
+                        player.sendMessage(ChatColor.RED + "That shop ID is already in use.");
+                        prompts.putIfAbsent(player.getUniqueId(), prompt);
+                    } else {
+                        shops.pendingIds.put(player.getUniqueId(), input);
+                        prompts.putIfAbsent(player.getUniqueId(), new Prompt(PromptType.SHOP_READER, prompt.checkoutLocation(), null));
+                        player.sendMessage(ChatColor.YELLOW + "Enter the ID of your existing ZipPay reader, or type cancel.");
+                    }
+                } else if (prompt.type() == PromptType.SHOP_READER) {
+                    String id = shops.pendingIds.get(player.getUniqueId());
+                    if (id != null && !shops.setup(player, prompt.checkoutLocation(), id, input)) {
+                        prompts.putIfAbsent(player.getUniqueId(), prompt);
+                    } else {
+                        shops.pendingIds.remove(player.getUniqueId());
                     }
                 } else {
                     if (!setupCardPin(player, prompt, input)) {
@@ -896,6 +970,7 @@ public final class ZipBankPlugin extends JavaPlugin implements Listener {
     public void onQuit(PlayerQuitEvent event) {
         prompts.remove(event.getPlayer().getUniqueId());
         cashSelections.remove(event.getPlayer().getUniqueId());
+        shops.quit(event.getPlayer().getUniqueId());
     }
 
     private boolean setupCardPin(Player player, Prompt prompt, String pin) throws SQLException {
@@ -1003,6 +1078,10 @@ public final class ZipBankPlugin extends JavaPlugin implements Listener {
 
     private void payCash(Player player, Block block, Sign sign, BankStore.Terminal terminal, long value) throws SQLException {
         UUID customer = player.getUniqueId();
+        if (terminal.customer() != null && !terminal.customer().equals(customer)) {
+            player.sendMessage(ChatColor.RED + "This checkout is reserved for another customer.");
+            return;
+        }
         if (!cashSupported(player)) {
             return;
         }
@@ -1043,10 +1122,13 @@ public final class ZipBankPlugin extends JavaPlugin implements Listener {
             player.sendMessage(ChatColor.RED + "Make room for your change, then tap that cash again.");
             return;
         }
-        player.getInventory().setStorageContents(afterPayment);
+        ShopCheckout.Fulfillment fulfillment = shops.preparePacking(player, checkoutLocation, terminal, afterPayment);
+        if (fulfillment == null) return;
+        player.getInventory().setStorageContents(fulfillment.customer());
         try {
             if (!store.settleCash(checkoutLocation, customer, terminal.token())) {
                 player.getInventory().setStorageContents(original);
+                updateSign(sign, 0);
                 player.sendMessage(ChatColor.RED + "Payment failed: the checkout changed or the shop account is full.");
                 cashSelections.remove(customer);
                 return;
@@ -1055,6 +1137,7 @@ public final class ZipBankPlugin extends JavaPlugin implements Listener {
             player.getInventory().setStorageContents(original);
             throw exception;
         }
+        fulfillment.applyOwner();
         cashSelections.remove(customer);
         updateSign(sign, 0);
         player.sendActionBar(Component.text("Amount left: 0.00"));
@@ -1165,6 +1248,10 @@ public final class ZipBankPlugin extends JavaPlugin implements Listener {
     }
 
     private void tap(Player player, ItemStack item, Block block, Sign sign, BankStore.Terminal terminal) throws SQLException {
+        if (terminal.customer() != null && !terminal.customer().equals(player.getUniqueId())) {
+            player.sendMessage(ChatColor.RED + "This checkout is reserved for another customer.");
+            return;
+        }
         UUID card = cardId(item);
         if (card == null) {
             player.sendMessage(ChatColor.RED + "Hold a valid debit card.");
@@ -1230,8 +1317,16 @@ public final class ZipBankPlugin extends JavaPlugin implements Listener {
                     ? "Card locked for five minutes after too many incorrect PIN attempts." : "This card cannot be verified."));
             return;
         }
+        ShopCheckout.Fulfillment fulfillment = shops.preparePacking(player, payment.location(), payment.terminal(),
+                player.getInventory().getStorageContents());
+        if (fulfillment == null) {
+            closeKeypad(player, holder);
+            return;
+        }
         closeKeypad(player, holder);
         if (store.settle(payment.location(), player.getUniqueId(), payment.terminal().token())) {
+            fulfillment.applyOwner();
+            player.getInventory().setStorageContents(fulfillment.customer());
             updateSign(sign, 0);
             long amount = payment.terminal().pending();
             player.sendMessage(ChatColor.GREEN + (amount > 0 ? "Paid " : "Refund received: ") + Money.format(Math.abs(amount)) + ".");
@@ -1240,13 +1335,15 @@ public final class ZipBankPlugin extends JavaPlugin implements Listener {
                 owner.sendMessage(ChatColor.GREEN + player.getName() + (amount > 0 ? " paid " : " received a refund of ") + Money.format(Math.abs(amount)) + ".");
             }
         } else {
+            updateSign(sign, 0);
             player.sendMessage(ChatColor.RED + "Payment failed: check balances and account limits, then tap again.");
         }
     }
 
-    private void updateSign(Sign sign, long amount) {
-        sign.getSide(Side.FRONT).line(1, Component.text("Tap Card Here"));
-        sign.getSide(Side.FRONT).line(2, amount == 0 ? Component.empty() : Component.text(Money.format(amount)));
+    void updateSign(Sign sign, long amount) {
+        sign.getSide(Side.FRONT).line(1, Component.text("Tap Card Here", NamedTextColor.DARK_BLUE));
+        sign.getSide(Side.FRONT).line(2, amount == 0 ? Component.empty() : Component.text(Money.format(amount),
+                amount < 0 ? NamedTextColor.DARK_RED : NamedTextColor.DARK_GREEN, TextDecoration.BOLD));
         sign.update();
     }
 
@@ -1276,7 +1373,7 @@ public final class ZipBankPlugin extends JavaPlugin implements Listener {
         return true;
     }
 
-    private Block checkoutBlock(String checkoutLocation) {
+    Block checkoutBlock(String checkoutLocation) {
         String[] parts = checkoutLocation.split(":");
         if (parts.length != 4) {
             return null;
@@ -1289,14 +1386,34 @@ public final class ZipBankPlugin extends JavaPlugin implements Listener {
         }
     }
 
+    void clearShopPrompt(UUID player, String location) {
+        prompts.computeIfPresent(player, (owner, prompt) ->
+                (prompt.type() == PromptType.SHOP_ID || prompt.type() == PromptType.SHOP_READER)
+                        && location.equals(prompt.checkoutLocation()) ? null : prompt);
+    }
+
     @Override
     public boolean onCommand(CommandSender sender, Command command, String label, String[] args) {
         if (!(sender instanceof Player player)) {
             sender.sendMessage("Only players can operate checkout signs.");
             return true;
         }
+        if (command.getName().equalsIgnoreCase("zipshop")) {
+            return shops.command(player, args);
+        }
         if (args.length == 0) {
             return false;
+        }
+        if (args[0].equalsIgnoreCase("checkout")) {
+            if (args.length != 2) return false;
+            try {
+                String reader = store.terminalLocation(player.getUniqueId(), args[1]);
+                if (reader == null) player.sendMessage(ChatColor.RED + "No reader with that ID belongs to you.");
+                else shops.openStaffChoice(player, reader);
+            } catch (SQLException exception) {
+                error(player, exception);
+            }
+            return true;
         }
         if (args[0].equalsIgnoreCase("wallet")) {
             if (args.length != 1) {

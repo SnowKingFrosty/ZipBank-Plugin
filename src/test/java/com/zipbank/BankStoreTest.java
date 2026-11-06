@@ -10,6 +10,155 @@ import org.junit.jupiter.api.io.TempDir;
 
 class BankStoreTest {
     @Test
+    void staffedOrderPersistsAndUsesExactTax(@TempDir Path directory) throws Exception {
+        String database = "jdbc:sqlite:" + directory.resolve("staff.db");
+        UUID owner = UUID.randomUUID();
+        UUID customer = UUID.randomUUID();
+        String token;
+        try (BankStore store = new BankStore(database)) {
+            store.createAccount(owner);
+            store.createAccount(customer);
+            store.changeBalance(customer, 1000);
+            store.registerTerminal("reader", owner);
+            assertTrue(store.setStaffPending("reader", owner, 301, new byte[] {3, 4}, true));
+            token = store.terminal("reader").token();
+            assertNull(store.terminal("reader").customer());
+            assertEquals(361, store.terminal("reader").pending());
+            assertFalse(store.setStaffPending("reader", owner, 100, new byte[] {1}, false));
+            assertNull(store.staffOrder("reader", "wrong-token"));
+        }
+        try (BankStore store = new BankStore(database)) {
+            assertArrayEquals(new byte[] {3, 4}, store.staffOrder("reader", token).items());
+            assertTrue(store.staffOrder("reader", token).pack());
+            assertFalse(store.settle("reader", owner, token));
+            assertTrue(store.settle("reader", customer, token));
+            assertEquals(301, store.balance(owner));
+            assertEquals(60, store.balance(BankStore.GOVERNMENT));
+            assertNull(store.staffOrder("reader", token));
+            assertTrue(store.setStaffPending("reader", owner, 100, new byte[] {5}, false));
+            String cashToken = store.terminal("reader").token();
+            assertFalse(store.staffOrder("reader", cashToken).pack());
+            assertTrue(store.settleCash("reader", customer, cashToken));
+            assertEquals(401, store.balance(owner));
+            assertEquals(80, store.balance(BankStore.GOVERNMENT));
+            assertTrue(store.setStaffPending("reader", owner, 100, new byte[] {5}, true));
+            assertTrue(store.setPending("reader", owner, 0));
+            assertNull(store.staffOrder("reader", store.terminal("reader").token()));
+        }
+    }
+
+    @Test
+    void shopSetupPersistsAndIdsAreUniquePerOwner(@TempDir Path directory) throws Exception {
+        String database = "jdbc:sqlite:" + directory.resolve("shops.db");
+        UUID owner = UUID.randomUUID();
+        UUID other = UUID.randomUUID();
+        UUID frame = UUID.randomUUID();
+        try (BankStore store = new BankStore(database)) {
+            store.createAccount(owner);
+            store.createAccount(other);
+            assertTrue(store.registerShop("shop", owner));
+            assertTrue(store.registerShop("second", owner));
+            assertTrue(store.registerShop("other", other));
+            assertTrue(store.assignShop("shop", owner, "Store", "reader"));
+            assertFalse(store.assignShop("second", owner, "store", "reader"));
+            assertTrue(store.assignShop("other", other, "store", "other-reader"));
+            assertFalse(store.assignShop("shop", other, "stolen", "reader"));
+            assertTrue(store.setShopDisplay("shop", owner, 42, frame));
+            assertFalse(store.setShopDisplay("shop", other, 43, UUID.randomUUID()));
+        }
+        try (BankStore store = new BankStore(database)) {
+            assertEquals("shop", store.shopLocation(owner, "STORE"));
+            assertEquals(new BankStore.Shop(owner, "Store", "reader", 42, frame.toString()), store.shop("shop"));
+            assertEquals(42, store.shopMaps().get("shop"));
+            store.removeShop("shop");
+            assertNull(store.shopLocation(owner, "store"));
+        }
+    }
+
+    @Test
+    void shopChargeReservesReaderAndPaysExactDisplayedTax() throws Exception {
+        try (BankStore store = new BankStore("jdbc:sqlite::memory:")) {
+            UUID owner = UUID.randomUUID();
+            UUID customer = UUID.randomUUID();
+            UUID other = UUID.randomUUID();
+            store.createAccount(owner);
+            store.createAccount(customer);
+            store.createAccount(other);
+            store.changeBalance(customer, 1000);
+            store.changeBalance(other, 1000);
+            store.registerTerminal("reader", owner);
+            assertFalse(store.setShopPending("reader", owner, owner, 100));
+            assertFalse(store.setShopPending("reader", other, customer, 100));
+            assertFalse(store.setShopPending("reader", owner, customer, Money.MAX_TRANSACTION));
+            assertTrue(store.setShopPending("reader", owner, customer, 101));
+            BankStore.Terminal pending = store.terminal("reader");
+            assertEquals(121, pending.pending());
+            assertEquals(20, pending.tax());
+            assertEquals(customer, pending.customer());
+            assertFalse(store.setShopPending("reader", owner, other, 100));
+            assertFalse(store.settle("reader", other, pending.token()));
+            assertFalse(store.settleCash("reader", other, pending.token()));
+            assertTrue(store.settle("reader", customer, pending.token()));
+            assertEquals(879, store.balance(customer));
+            assertEquals(101, store.balance(owner));
+            assertEquals(20, store.balance(BankStore.GOVERNMENT));
+            assertNull(store.terminal("reader").customer());
+            assertNull(store.terminal("reader").tax());
+            assertFalse(store.settle("reader", customer, pending.token()));
+            assertTrue(store.setShopPending("reader", owner, customer, 100));
+            assertTrue(store.settleCash("reader", customer, store.terminal("reader").token()));
+            assertEquals(201, store.balance(owner));
+            assertEquals(40, store.balance(BankStore.GOVERNMENT));
+        }
+    }
+
+    @Test
+    void shopReservationSurvivesRestart(@TempDir Path directory) throws Exception {
+        String database = "jdbc:sqlite:" + directory.resolve("reservation.db");
+        UUID owner = UUID.randomUUID();
+        UUID customer = UUID.randomUUID();
+        String token;
+        try (BankStore store = new BankStore(database)) {
+            store.createAccount(owner);
+            store.createAccount(customer);
+            store.changeBalance(customer, 120);
+            store.registerTerminal("reader", owner);
+            assertTrue(store.setShopPending("reader", owner, customer, 300, new byte[] {1, 2, 3}));
+            token = store.terminal("reader").token();
+        }
+        try (BankStore store = new BankStore(database)) {
+            assertEquals(customer, store.terminal("reader").customer());
+            assertEquals(60, store.terminal("reader").tax());
+            assertArrayEquals(new byte[] {1, 2, 3}, store.pendingItems("reader", token));
+            assertNull(store.pendingItems("reader", "wrong-token"));
+            store.changeBalance(customer, 240);
+            assertTrue(store.settle("reader", customer, token));
+            assertEquals(300, store.balance(owner));
+            assertEquals(60, store.balance(BankStore.GOVERNMENT));
+            assertNull(store.pendingItems("reader", token));
+        }
+    }
+
+    @Test
+    void clearingOrReplacingReaderDiscardsPackingRequest() throws Exception {
+        try (BankStore store = new BankStore("jdbc:sqlite::memory:")) {
+            UUID owner = UUID.randomUUID();
+            UUID customer = UUID.randomUUID();
+            store.createAccount(owner);
+            store.createAccount(customer);
+            store.registerTerminal("reader", owner);
+            assertTrue(store.setShopPending("reader", owner, customer, 300, new byte[] {1, 2}));
+            String originalToken = store.terminal("reader").token();
+            assertFalse(store.settle("reader", customer, originalToken));
+            assertArrayEquals(new byte[] {1, 2}, store.pendingItems("reader", originalToken));
+            assertTrue(store.setPending("reader", owner, 400));
+            assertNull(store.pendingItems("reader", originalToken));
+            assertNull(store.pendingItems("reader", store.terminal("reader").token()));
+            assertFalse(store.settle("reader", customer, originalToken));
+        }
+    }
+
+    @Test
     void persistsAccountsCardsAndTerminals(@TempDir Path directory) throws Exception {
         String database = "jdbc:sqlite:" + directory.resolve("bank.db");
         UUID owner = UUID.randomUUID();

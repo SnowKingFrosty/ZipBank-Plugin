@@ -6,7 +6,10 @@ depend: [Vault]
 commands:
   zippay:
     description: Manage checkout payments, IDs, and your cash wallet.
-    usage: /zippay wallet | /zippay <charge|refund> <amount> <id> | /zippay <cancel|assign> <id> | /zippay transfer <amount> <player> | /zippay government [deposit <amount> | transfer <amount> <player>]
+    usage: /zippay wallet | /zippay checkout <id> | /zippay <charge|refund> <amount> <id> | /zippay <cancel|assign> <id> | /zippay transfer <amount> <player> | /zippay government [deposit <amount> | transfer <amount> <player>]
+  zipshop:
+    description: Price items and manage self-checkout.
+    usage: /zipshop price <amount> | /zipshop setup <id> <reader-id> | /zipshop display <id> | /zipshop clear
 permissions:
   zipbank.atm.create:
     description: Create ZipATM signs.
