@@ -25,6 +25,8 @@ import org.bukkit.event.EventHandler;
 import org.bukkit.event.EventPriority;
 import org.bukkit.event.Listener;
 import org.bukkit.event.player.PlayerInteractEntityEvent;
+import org.bukkit.event.player.PlayerInteractAtEntityEvent;
+import io.papermc.paper.event.player.PlayerItemFrameChangeEvent;
 import org.bukkit.event.server.MapInitializeEvent;
 import org.bukkit.event.world.EntitiesLoadEvent;
 import org.bukkit.entity.Entity;
@@ -117,6 +119,12 @@ final class ShopCheckout implements Listener {
             MapView map = Bukkit.getMap(entry.getValue());
             if (map != null) installRenderer(map, entry.getKey());
         }
+        // Frames in already-loaded chunks do not trigger EntitiesLoadEvent.
+        plugin.getServer().getScheduler().runTask(plugin, () -> {
+            for (UUID id : frames.keySet()) {
+                if (Bukkit.getEntity(id) instanceof ItemFrame frame) lockFrame(frame);
+            }
+        });
     }
 
     // Maps load lazily after restart, so renderers are reattached when each one initializes.
@@ -129,8 +137,27 @@ final class ShopCheckout implements Listener {
     @EventHandler
     public void onEntitiesLoad(EntitiesLoadEvent event) {
         for (Entity entity : event.getEntities()) {
-            if (entity instanceof ItemFrame frame && frames.containsKey(frame.getUniqueId())) lockFrame(frame);
+            if (entity instanceof ItemFrame frame && locationOf(frame) != null) lockFrame(frame);
         }
+    }
+
+    private String locationOf(ItemFrame frame) {
+        String location = frames.get(frame.getUniqueId());
+        if (location == null && frame.getItem().getItemMeta() instanceof MapMeta meta && meta.hasMapId()) {
+            location = mapLocations.get(meta.getMapId());
+        }
+        return location;
+    }
+
+    // Covers every rotation path regardless of which interact event fires.
+    @EventHandler(priority = EventPriority.HIGHEST)
+    public void onFrameChange(PlayerItemFrameChangeEvent event) {
+        if (locationOf(event.getItemFrame()) != null) event.setCancelled(true);
+    }
+
+    @EventHandler(priority = EventPriority.HIGHEST)
+    public void onFrameInteractAt(PlayerInteractAtEntityEvent event) {
+        if (event.getRightClicked() instanceof ItemFrame frame && locationOf(frame) != null) event.setCancelled(true);
     }
 
     private void lockFrame(ItemFrame frame) {
@@ -442,10 +469,12 @@ final class ShopCheckout implements Listener {
 
     @EventHandler(priority = EventPriority.HIGH, ignoreCancelled = true)
     public void onFrameClick(PlayerInteractEntityEvent event) {
-        if (event.getHand() != EquipmentSlot.HAND || !(event.getRightClicked() instanceof ItemFrame frame)) return;
-        String location = frames.get(frame.getUniqueId());
+        if (!(event.getRightClicked() instanceof ItemFrame frame)) return;
+        String location = locationOf(frame);
         if (location == null) return;
         event.setCancelled(true);
+        if (event.getHand() != EquipmentSlot.HAND) return;
+        lockFrame(frame);
         RayTraceResult hit = event.getPlayer().getWorld().rayTraceEntities(event.getPlayer().getEyeLocation(),
                 event.getPlayer().getEyeLocation().getDirection(), 8, entity -> entity.equals(frame));
         if (hit == null) {
@@ -465,7 +494,7 @@ final class ShopCheckout implements Listener {
 
     @EventHandler(priority = EventPriority.HIGH, ignoreCancelled = true)
     public void onFrameDamage(EntityDamageByEntityEvent event) {
-        if (!(event.getEntity() instanceof ItemFrame frame) || !frames.containsKey(frame.getUniqueId())) return;
+        if (!(event.getEntity() instanceof ItemFrame frame) || locationOf(frame) == null) return;
         if (!(event.getDamager() instanceof Player player) || !canManageFrame(player, frame)) {
             event.setCancelled(true);
         }
@@ -473,7 +502,7 @@ final class ShopCheckout implements Listener {
 
     @EventHandler(priority = EventPriority.HIGH, ignoreCancelled = true)
     public void onFrameBreak(HangingBreakByEntityEvent event) {
-        if (!(event.getEntity() instanceof ItemFrame frame) || !frames.containsKey(frame.getUniqueId())) return;
+        if (!(event.getEntity() instanceof ItemFrame frame) || locationOf(frame) == null) return;
         if (!(event.getRemover() instanceof Player player) || !canManageFrame(player, frame)) {
             event.setCancelled(true);
         }
@@ -481,7 +510,7 @@ final class ShopCheckout implements Listener {
 
     private boolean canManageFrame(Player player, ItemFrame frame) {
         try {
-            BankStore.Shop shop = store.shop(frames.get(frame.getUniqueId()));
+            BankStore.Shop shop = store.shop(locationOf(frame));
             UUID owner = shop != null ? shop.owner() : null;
             if (player.getUniqueId().equals(owner) || player.hasPermission("zipbank.admin")) return true;
             player.sendMessage(ChatColor.RED + "Only the shop owner can remove this display.");
