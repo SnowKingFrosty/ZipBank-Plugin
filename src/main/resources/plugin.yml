@@ -15,5 +15,5 @@ permissions:
     description: Create ZipPay checkout signs.
     default: true
   zipbank.admin:
-    description: Remove another player's checkout sign and view the government budget.
+    description: Remove another player's checkout sign and manage the government budget.
     default: op

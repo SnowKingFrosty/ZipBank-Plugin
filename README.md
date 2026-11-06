@@ -49,8 +49,8 @@ Every checkout charge (card or cash) carries a 5% sales tax, rounded down to the
 
 - `/zippay transfer <amount> <player>` sends money from your bank balance to another player's account (no tax). The recipient must already have a ZipBank account.
 
-Admin commands (require `zipbank.admin`):
+Anyone can view the budget balance; only admins (`zipbank.admin`) can change it:
 
-- `/zippay government` shows the government budget balance.
+- (All players) `/zippay government` shows the government budget balance.
 - `/zippay government deposit <amount>` moves money from your bank balance into the budget.
 - `/zippay government transfer <amount> <player>` pays a player from the budget.

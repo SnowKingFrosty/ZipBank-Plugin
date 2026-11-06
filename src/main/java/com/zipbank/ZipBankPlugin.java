@@ -1324,8 +1324,8 @@ public final class ZipBankPlugin extends JavaPlugin implements Listener {
             if (args.length != 1 && args.length != 3 && args.length != 4) {
                 return false;
             }
-            if (!player.hasPermission("zipbank.admin")) {
-                player.sendMessage(ChatColor.RED + "You do not have permission to use the government budget.");
+            if (args.length > 1 && !player.hasPermission("zipbank.admin")) {
+                player.sendMessage(ChatColor.RED + "Only administrators can deposit to or transfer from the government budget.");
                 return true;
             }
             if (args.length == 3) {
