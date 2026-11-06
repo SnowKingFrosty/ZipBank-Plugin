@@ -17,6 +17,13 @@ final class BankStore implements AutoCloseable {
     record Terminal(UUID owner, long pending, String token) { }
     record WalletCard(UUID id, byte[] item) { }
     record Transaction(long id, long timestamp, String type, long amount, long balanceAfter) { }
+    static final UUID GOVERNMENT = new UUID(0L, 0L);
+    static final long TAX_PERCENT = 5;
+
+    static long salesTax(long amount) {
+        return amount * TAX_PERCENT / 100;
+    }
+
     enum PinResult { OK, INVALID, LOCKED, UNSET, NOT_FOUND }
 
     BankStore(String url) throws SQLException {
@@ -302,6 +309,76 @@ final class BankStore implements AutoCloseable {
         }
     }
 
+    private boolean payToGovernment(long tax) throws SQLException {
+        createAccount(GOVERNMENT);
+        if (tax == 0) {
+            return true;
+        }
+        // The government budget may go negative to cover refunded tax.
+        try (PreparedStatement statement = connection.prepareStatement(
+                "UPDATE accounts SET balance = balance + ? WHERE owner = ? AND balance + ? <= ?")) {
+            statement.setLong(1, tax);
+            statement.setString(2, GOVERNMENT.toString());
+            statement.setLong(3, tax);
+            statement.setLong(4, MAX_BALANCE);
+            return statement.executeUpdate() == 1;
+        }
+    }
+
+    boolean transfer(UUID from, UUID to, long amount) throws SQLException {
+        connection.setAutoCommit(false);
+        try {
+            if (from.equals(to) || amount <= 0 || !changeBalance(from, -amount) || !changeBalance(to, amount)) {
+                connection.rollback();
+                return false;
+            }
+            connection.commit();
+            return true;
+        } catch (SQLException exception) {
+            connection.rollback();
+            throw exception;
+        } finally {
+            connection.setAutoCommit(true);
+        }
+    }
+
+    // Works while the budget is negative, unlike changeBalance.
+    boolean depositToGovernment(UUID from, long amount) throws SQLException {
+        connection.setAutoCommit(false);
+        try {
+            if (GOVERNMENT.equals(from) || amount <= 0 || !changeBalance(from, -amount) || !payToGovernment(amount)) {
+                connection.rollback();
+                return false;
+            }
+            connection.commit();
+            return true;
+        } catch (SQLException exception) {
+            connection.rollback();
+            throw exception;
+        } finally {
+            connection.setAutoCommit(true);
+        }
+    }
+
+    // The government budget may go negative when paying out.
+    boolean transferFromGovernment(UUID to, long amount) throws SQLException {
+        connection.setAutoCommit(false);
+        try {
+            if (amount <= 0 || GOVERNMENT.equals(to) || balance(to) == null || !changeBalance(to, amount)
+                    || !payToGovernment(-amount)) {
+                connection.rollback();
+                return false;
+            }
+            connection.commit();
+            return true;
+        } catch (SQLException exception) {
+            connection.rollback();
+            throw exception;
+        } finally {
+            connection.setAutoCommit(true);
+        }
+    }
+
     boolean settle(String location, UUID customer, String expectedToken) throws SQLException {
         connection.setAutoCommit(false);
         try {
@@ -315,7 +392,12 @@ final class BankStore implements AutoCloseable {
             UUID payer = amount > 0 ? customer : terminal.owner();
             UUID payee = amount > 0 ? terminal.owner() : customer;
             long positive = Math.abs(amount);
-            if (!changeBalance(payer, -positive) || !changeBalance(payee, positive)
+            long tax = salesTax(positive);
+            // Charges send the tax to the government; refunds take it back from the government.
+            boolean moved = amount > 0
+                    ? changeBalance(payer, -positive) && changeBalance(payee, positive - tax) && payToGovernment(tax)
+                    : changeBalance(payer, -(positive - tax)) && changeBalance(payee, positive) && payToGovernment(-tax);
+            if (!moved
                     || !setPending(location, terminal.owner(), 0)) {
                 connection.rollback();
                 return false;
@@ -336,7 +418,8 @@ final class BankStore implements AutoCloseable {
             Terminal terminal = terminal(location);
             if (terminal == null || terminal.pending() <= 0 || terminal.owner().equals(customer)
                     || expectedToken == null || !expectedToken.equals(terminal.token())
-                    || !changeBalance(terminal.owner(), terminal.pending())
+                    || !changeBalance(terminal.owner(), terminal.pending() - salesTax(terminal.pending()))
+                    || !payToGovernment(salesTax(terminal.pending()))
                     || !setPending(location, terminal.owner(), 0)) {
                 connection.rollback();
                 return false;

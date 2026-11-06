@@ -42,3 +42,15 @@ To pay a positive charge with cash, right-click the sign once per bill or coin h
 Amounts must be positive, with at most two decimal places, and no greater than 9999999.99. Bank balances are limited to 9999999999.99. Your economy provider may impose additional precision or balance restrictions.
 
 Vault, player inventories, and SQLite cannot share a transaction: an abrupt server failure during a transfer involving Vault or physical cash can require manual reconciliation. The plugin attempts to reverse failed transfers and logs failed wallet reversals. Card checkout payments and refunds are atomic within SQLite. Protect your server against item duplication and untrusted plugins or operators that can create tagged items; physical cash cannot prevent such duplication.
+
+## Sales Tax and Government Budget
+
+Every checkout charge (card or cash) carries a 5% sales tax, rounded down to the cent. The customer pays the full amount; the tax is deducted before the shop owner is credited and goes to a separate "Government Budget" account that players cannot use. Refunds reverse the tax: the customer receives the full refunded amount, the shop owner pays the after-tax part, and the government budget pays the tax portion. The budget is allowed to go negative.
+
+- `/zippay transfer <amount> <player>` sends money from your bank balance to another player's account (no tax). The recipient must already have a ZipBank account.
+
+Admin commands (require `zipbank.admin`):
+
+- `/zippay government` shows the government budget balance.
+- `/zippay government deposit <amount>` moves money from your bank balance into the budget.
+- `/zippay government transfer <amount> <player>` pays a player from the budget.

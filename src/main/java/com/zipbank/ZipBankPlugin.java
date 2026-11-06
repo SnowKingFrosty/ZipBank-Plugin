@@ -15,6 +15,7 @@ import net.milkbowl.vault.economy.EconomyResponse;
 import org.bukkit.Bukkit;
 import org.bukkit.ChatColor;
 import org.bukkit.Material;
+import org.bukkit.OfflinePlayer;
 import org.bukkit.NamespacedKey;
 import org.bukkit.World;
 import org.bukkit.block.Block;
@@ -1119,6 +1120,50 @@ public final class ZipBankPlugin extends JavaPlugin implements Listener {
         player.sendMessage(ChatColor.GREEN + "Transfer complete: " + Money.format(amount) + ".");
     }
 
+    private void transferToPlayer(Player player, String amountText, String targetName, boolean government) throws SQLException {
+        long amount;
+        try {
+            amount = Money.parse(amountText);
+        } catch (IllegalArgumentException exception) {
+            player.sendMessage(ChatColor.RED + exception.getMessage());
+            return;
+        }
+        OfflinePlayer target = Bukkit.getPlayerExact(targetName);
+        if (target == null) {
+            target = Bukkit.getOfflinePlayerIfCached(targetName);
+        }
+        if (target == null || store.balance(target.getUniqueId()) == null) {
+            player.sendMessage(ChatColor.RED + "That player does not have a ZipBank account.");
+            return;
+        }
+        UUID targetId = target.getUniqueId();
+        String name = target.getName() == null ? targetName : target.getName();
+        if (government) {
+            if (!store.transferFromGovernment(targetId, amount)) {
+                player.sendMessage(ChatColor.RED + "Transfer failed: the recipient's account cannot accept that amount.");
+                return;
+            }
+            store.logTransaction(targetId, "Government Transfer", amount);
+            player.sendMessage(ChatColor.GREEN + "Sent " + Money.format(amount) + " from the government budget to " + name + ".");
+        } else {
+            if (targetId.equals(player.getUniqueId())) {
+                player.sendMessage(ChatColor.RED + "You cannot transfer money to yourself.");
+                return;
+            }
+            if (!store.transfer(player.getUniqueId(), targetId, amount)) {
+                player.sendMessage(ChatColor.RED + "Transfer failed: check your balance and the recipient's account limit.");
+                return;
+            }
+            store.logTransaction(player.getUniqueId(), "Transfer to " + name, -amount);
+            store.logTransaction(targetId, "Transfer from " + player.getName(), amount);
+            player.sendMessage(ChatColor.GREEN + "Sent " + Money.format(amount) + " to " + name + ".");
+        }
+        Player online = Bukkit.getPlayer(targetId);
+        if (online != null) {
+            online.sendMessage(ChatColor.GREEN + "You received " + Money.format(amount) + (government ? " from the government budget." : " from " + player.getName() + "."));
+        }
+    }
+
     private void tap(Player player, ItemStack item, Block block, Sign sign, BankStore.Terminal terminal) throws SQLException {
         UUID card = cardId(item);
         if (card == null) {
@@ -1259,6 +1304,63 @@ public final class ZipBankPlugin extends JavaPlugin implements Listener {
             }
             try {
                 openWallet(player);
+            } catch (SQLException exception) {
+                error(player, exception);
+            }
+            return true;
+        }
+        if (args[0].equalsIgnoreCase("transfer")) {
+            if (args.length != 3) {
+                return false;
+            }
+            try {
+                transferToPlayer(player, args[1], args[2], false);
+            } catch (SQLException exception) {
+                error(player, exception);
+            }
+            return true;
+        }
+        if (args[0].equalsIgnoreCase("government")) {
+            if (args.length != 1 && args.length != 3 && args.length != 4) {
+                return false;
+            }
+            if (!player.hasPermission("zipbank.admin")) {
+                player.sendMessage(ChatColor.RED + "You do not have permission to use the government budget.");
+                return true;
+            }
+            if (args.length == 3) {
+                if (!args[1].equalsIgnoreCase("deposit")) {
+                    return false;
+                }
+                try {
+                    long amount = Money.parse(args[2]);
+                    if (store.depositToGovernment(player.getUniqueId(), amount)) {
+                        store.logTransaction(player.getUniqueId(), "Government Deposit", -amount);
+                        player.sendMessage(ChatColor.GREEN + "Deposited " + Money.format(amount) + " into the government budget.");
+                    } else {
+                        player.sendMessage(ChatColor.RED + "Deposit failed: check your balance and the budget limit.");
+                    }
+                } catch (IllegalArgumentException exception) {
+                    player.sendMessage(ChatColor.RED + exception.getMessage());
+                } catch (SQLException exception) {
+                    error(player, exception);
+                }
+                return true;
+            }
+            if (args.length == 4) {
+                if (!args[1].equalsIgnoreCase("transfer")) {
+                    return false;
+                }
+                try {
+                    transferToPlayer(player, args[2], args[3], true);
+                } catch (SQLException exception) {
+                    error(player, exception);
+                }
+                return true;
+            }
+            try {
+                Long balance = store.balance(BankStore.GOVERNMENT);
+                player.sendMessage(ChatColor.GREEN + "Government Budget: " + Money.format(balance == null ? 0 : balance) + ".");
             } catch (SQLException exception) {
                 error(player, exception);
             }

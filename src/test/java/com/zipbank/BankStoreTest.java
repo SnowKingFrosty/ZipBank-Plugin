@@ -45,24 +45,69 @@ class BankStoreTest {
             assertTrue(store.setPending("checkout", shop, 600));
             assertTrue(store.settle("checkout", customer, store.terminal("checkout").token()));
             assertEquals(400L, store.balance(customer));
-            assertEquals(600L, store.balance(shop));
+            assertEquals(570L, store.balance(shop));
+            assertEquals(30L, store.balance(BankStore.GOVERNMENT));
             assertFalse(store.settle("checkout", customer, store.terminal("checkout").token()));
             assertTrue(store.setPending("checkout", shop, -250));
             assertTrue(store.settle("checkout", customer, store.terminal("checkout").token()));
             assertEquals(650L, store.balance(customer));
-            assertEquals(350L, store.balance(shop));
+            assertEquals(332L, store.balance(shop));
+            assertEquals(18L, store.balance(BankStore.GOVERNMENT));
             assertTrue(store.setPending("checkout", shop, -500));
             assertFalse(store.settle("checkout", customer, store.terminal("checkout").token()));
             assertEquals(650L, store.balance(customer));
-            assertEquals(350L, store.balance(shop));
+            assertEquals(332L, store.balance(shop));
             assertEquals(-500L, store.terminal("checkout").pending());
             assertFalse(store.settle("checkout", shop, store.terminal("checkout").token()));
-            assertTrue(store.changeBalance(shop, BankStore.MAX_BALANCE - 350));
+            assertTrue(store.changeBalance(shop, BankStore.MAX_BALANCE - 332));
             assertTrue(store.setPending("checkout", shop, 100));
             assertFalse(store.settle("checkout", customer, store.terminal("checkout").token()));
             assertEquals(650L, store.balance(customer));
             assertEquals(BankStore.MAX_BALANCE, store.balance(shop));
             assertEquals(100L, store.terminal("checkout").pending());
+        }
+    }
+
+    @Test
+    void refundsMayTakeGovernmentBudgetNegative() throws Exception {
+        try (BankStore store = new BankStore("jdbc:sqlite::memory:")) {
+            UUID shop = UUID.randomUUID();
+            UUID customer = UUID.randomUUID();
+            store.createAccount(shop);
+            store.createAccount(customer);
+            store.changeBalance(shop, 1000);
+            store.registerTerminal("checkout", shop);
+            assertTrue(store.setPending("checkout", shop, -1000));
+            assertTrue(store.settle("checkout", customer, store.terminal("checkout").token()));
+            assertEquals(-50L, store.balance(BankStore.GOVERNMENT));
+            assertEquals(50L, store.balance(shop));
+            assertEquals(1000L, store.balance(customer));
+        }
+    }
+
+    @Test
+    void playerAndGovernmentTransfers() throws Exception {
+        try (BankStore store = new BankStore("jdbc:sqlite::memory:")) {
+            UUID a = UUID.randomUUID();
+            UUID b = UUID.randomUUID();
+            store.createAccount(a);
+            store.createAccount(b);
+            store.changeBalance(a, 500);
+            assertTrue(store.transfer(a, b, 200));
+            assertFalse(store.transfer(a, b, 301));
+            assertFalse(store.transfer(a, a, 1));
+            assertEquals(300L, store.balance(a));
+            assertEquals(200L, store.balance(b));
+            assertTrue(store.transferFromGovernment(b, 100));
+            assertEquals(300L, store.balance(b));
+            assertEquals(-100L, store.balance(BankStore.GOVERNMENT));
+            assertTrue(store.depositToGovernment(b, 250));
+            assertEquals(150L, store.balance(BankStore.GOVERNMENT));
+            assertEquals(50L, store.balance(b));
+            assertFalse(store.depositToGovernment(b, 51));
+            assertTrue(store.transferFromGovernment(b, 250));
+            assertFalse(store.transferFromGovernment(UUID.randomUUID(), 100));
+            assertEquals(-100L, store.balance(BankStore.GOVERNMENT));
         }
     }
 
@@ -240,17 +285,17 @@ class BankStoreTest {
             String current = store.terminal("checkout").token();
             assertFalse(store.settleCash("checkout", shop, current));
             assertTrue(store.settleCash("checkout", customer, current));
-            assertEquals(125L, store.balance(shop));
+            assertEquals(119L, store.balance(shop));
             assertEquals(1000L, store.balance(customer));
             assertFalse(store.settleCash("checkout", customer, current));
             assertFalse(store.settle("checkout", customer, current));
             store.setPending("checkout", shop, -125);
             assertFalse(store.settleCash("checkout", customer, store.terminal("checkout").token()));
             assertEquals(-125L, store.terminal("checkout").pending());
-            assertTrue(store.changeBalance(shop, BankStore.MAX_BALANCE - 125));
-            store.setPending("checkout", shop, 1);
+            assertTrue(store.changeBalance(shop, BankStore.MAX_BALANCE - 119));
+            store.setPending("checkout", shop, 100);
             assertFalse(store.settleCash("checkout", customer, store.terminal("checkout").token()));
-            assertEquals(1L, store.terminal("checkout").pending());
+            assertEquals(100L, store.terminal("checkout").pending());
             assertEquals(BankStore.MAX_BALANCE, store.balance(shop));
         }
     }
