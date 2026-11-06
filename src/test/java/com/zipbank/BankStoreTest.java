@@ -45,21 +45,21 @@ class BankStoreTest {
             assertTrue(store.setPending("checkout", shop, 600));
             assertTrue(store.settle("checkout", customer, store.terminal("checkout").token()));
             assertEquals(400L, store.balance(customer));
-            assertEquals(570L, store.balance(shop));
-            assertEquals(30L, store.balance(BankStore.GOVERNMENT));
+            assertEquals(480L, store.balance(shop));
+            assertEquals(120L, store.balance(BankStore.GOVERNMENT));
             assertFalse(store.settle("checkout", customer, store.terminal("checkout").token()));
             assertTrue(store.setPending("checkout", shop, -250));
             assertTrue(store.settle("checkout", customer, store.terminal("checkout").token()));
             assertEquals(650L, store.balance(customer));
-            assertEquals(332L, store.balance(shop));
-            assertEquals(18L, store.balance(BankStore.GOVERNMENT));
+            assertEquals(280L, store.balance(shop));
+            assertEquals(70L, store.balance(BankStore.GOVERNMENT));
             assertTrue(store.setPending("checkout", shop, -500));
             assertFalse(store.settle("checkout", customer, store.terminal("checkout").token()));
             assertEquals(650L, store.balance(customer));
-            assertEquals(332L, store.balance(shop));
+            assertEquals(280L, store.balance(shop));
             assertEquals(-500L, store.terminal("checkout").pending());
             assertFalse(store.settle("checkout", shop, store.terminal("checkout").token()));
-            assertTrue(store.changeBalance(shop, BankStore.MAX_BALANCE - 332));
+            assertTrue(store.changeBalance(shop, BankStore.MAX_BALANCE - 280));
             assertTrue(store.setPending("checkout", shop, 100));
             assertFalse(store.settle("checkout", customer, store.terminal("checkout").token()));
             assertEquals(650L, store.balance(customer));
@@ -79,8 +79,8 @@ class BankStoreTest {
             store.registerTerminal("checkout", shop);
             assertTrue(store.setPending("checkout", shop, -1000));
             assertTrue(store.settle("checkout", customer, store.terminal("checkout").token()));
-            assertEquals(-50L, store.balance(BankStore.GOVERNMENT));
-            assertEquals(50L, store.balance(shop));
+            assertEquals(-200L, store.balance(BankStore.GOVERNMENT));
+            assertEquals(200L, store.balance(shop));
             assertEquals(1000L, store.balance(customer));
         }
     }
@@ -285,14 +285,14 @@ class BankStoreTest {
             String current = store.terminal("checkout").token();
             assertFalse(store.settleCash("checkout", shop, current));
             assertTrue(store.settleCash("checkout", customer, current));
-            assertEquals(119L, store.balance(shop));
+            assertEquals(100L, store.balance(shop));
             assertEquals(1000L, store.balance(customer));
             assertFalse(store.settleCash("checkout", customer, current));
             assertFalse(store.settle("checkout", customer, current));
             store.setPending("checkout", shop, -125);
             assertFalse(store.settleCash("checkout", customer, store.terminal("checkout").token()));
             assertEquals(-125L, store.terminal("checkout").pending());
-            assertTrue(store.changeBalance(shop, BankStore.MAX_BALANCE - 119));
+            assertTrue(store.changeBalance(shop, BankStore.MAX_BALANCE - 100));
             store.setPending("checkout", shop, 100);
             assertFalse(store.settleCash("checkout", customer, store.terminal("checkout").token()));
             assertEquals(100L, store.terminal("checkout").pending());

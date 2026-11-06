@@ -18,7 +18,7 @@ final class BankStore implements AutoCloseable {
     record WalletCard(UUID id, byte[] item) { }
     record Transaction(long id, long timestamp, String type, long amount, long balanceAfter) { }
     static final UUID GOVERNMENT = new UUID(0L, 0L);
-    static final long TAX_PERCENT = 5;
+    static final long TAX_PERCENT = 20;
 
     static long salesTax(long amount) {
         return amount * TAX_PERCENT / 100;

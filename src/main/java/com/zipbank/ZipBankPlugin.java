@@ -1385,7 +1385,12 @@ public final class ZipBankPlugin extends JavaPlugin implements Listener {
                 }
                 return true;
             }
-            long amount = cancel ? 0 : Money.parse(args[1]);
+            long baseAmount = cancel ? 0 : Money.parse(args[1]);
+            long amount = baseAmount;
+            if (!cancel) {
+                long tax = BankStore.salesTax(baseAmount);
+                amount = baseAmount + tax;
+            }
             if (refund) {
                 amount = -amount;
             }
@@ -1406,7 +1411,14 @@ public final class ZipBankPlugin extends JavaPlugin implements Listener {
                 return true;
             }
             updateSign(sign, amount);
-            player.sendMessage(ChatColor.GREEN + (cancel ? "Checkout cleared." : "Checkout set to " + Money.format(amount) + "."));
+            if (cancel) {
+                player.sendMessage(ChatColor.GREEN + "Checkout cleared.");
+            } else {
+                long displayAmount = refund ? baseAmount : amount;
+                String displayMessage = refund ? "Refund set to " : "Checkout set to ";
+                player.sendMessage(ChatColor.GREEN + displayMessage + Money.format(Math.abs(displayAmount)) + 
+                    " (including " + Money.format(BankStore.salesTax(baseAmount)) + " tax).");
+            }
         } catch (IllegalArgumentException exception) {
             player.sendMessage(ChatColor.RED + exception.getMessage());
         } catch (SQLException exception) {
