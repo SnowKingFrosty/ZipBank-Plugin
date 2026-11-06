@@ -365,7 +365,8 @@ final class ShopCheckout implements Listener {
         ItemFrame frame = target.getWorld().spawn(target.getLocation().add(0.5, 0.5, 0.5), ItemFrame.class, entity -> {
             entity.setFacingDirection(face, true);
             entity.setVisible(false);
-            entity.setRotation(Rotation.NONE);
+            entity.setFixed(true);
+            entity.setCustomNameVisible(false);            entity.setRotation(Rotation.NONE);
         });
         HangingPlaceEvent placement = new HangingPlaceEvent(frame, player, support, face, EquipmentSlot.HAND, mapItem);
         plugin.getServer().getPluginManager().callEvent(placement);
@@ -391,7 +392,12 @@ final class ShopCheckout implements Listener {
         }
         installRenderer(map, location);
         frames.put(frame.getUniqueId(), location);
-        frame.setItem(mapItem);
+        ItemStack displayItem = mapItem.clone();
+        MapMeta displayMeta = (MapMeta) displayItem.getItemMeta();
+        displayMeta.displayName(null);
+        displayMeta.lore(null);
+        displayItem.setItemMeta(displayMeta);
+        frame.setItem(displayItem);
         player.getInventory().setItemInMainHand(null);
         player.sendMessage(ChatColor.GREEN + "Shop display installed. Customers can click its bottom-right PAY area.");
     }
