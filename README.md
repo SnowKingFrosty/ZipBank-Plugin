@@ -39,6 +39,12 @@ The customer right-clicks the sign holding their own debit card in their main ha
 
 To pay a positive charge with cash, right-click the sign once per bill or coin held in the main hand. The action bar shows the remaining amount. Selected cash stays in the player's inventory until enough has been selected; then it is removed, the shop's bank account is credited, and any change is placed in the player's inventory. If there is not enough room for change, make room and tap the final bill or coin again. Partial selections are discarded on disconnect, checkout changes, or switching signs; no cash is consumed. Cash cannot collect refunds; use a debit card for refunds.
 
+### Staffed checkout
+
+Create and link a `[ZipShop]` scanner and map to your `[ZipPay]` reader as described below. The customer hands their items to the owner. The owner holds each item or stack and right-clicks the `[ZipShop]` sign to scan it; each item must have been priced by that owner with `/zipshop price <amount>`. Each click scans the entire held stack. To discard an unsubmitted cart, use `/zipshop clear`.
+
+The owner sees their scans on the `[ZipShop]` map and presses **PAY** to choose whether the customer wants shulkers; `/zippay checkout <reader-id>` opens the same choice without a map. Each shulker costs 2.00 before tax and holds up to 27 stacks; items that cannot be nested are delivered separately. The `[ZipPay]` sign then displays the total including tax. Whoever successfully pays that reader receives the scanned items, packed if selected. The owner must remain online with the full scanned quantities in their storage inventory; the customer needs enough storage space for the purchase and any cash change. If either condition is not met, payment fails without moving items or money. The owner can cancel the pending transaction with `/zippay cancel <reader-id>`. A pending staffed order persists across restarts until paid, cancelled, or replaced.
+
 ## ZipShop self-checkout
 
 ZipShop is an **honor system**: it does not prevent theft, remove goods from customers, or verify that everything taken from a chest was scanned. Priced items retain their shop tags after payment. Owners should protect their shop and use the feature only where they trust customers.
