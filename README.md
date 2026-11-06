@@ -45,7 +45,15 @@ Vault, player inventories, and SQLite cannot share a transaction: an abrupt serv
 
 ## Sales Tax and Government Budget
 
-Every checkout charge (card or cash) carries a 5% sales tax, rounded down to the cent. The customer pays the full amount; the tax is deducted before the shop owner is credited and goes to a separate "Government Budget" account that players cannot use. Refunds reverse the tax: the customer receives the full refunded amount, the shop owner pays the after-tax part, and the government budget pays the tax portion. The budget is allowed to go negative.
+Every checkout charge (card or cash) carries a 20% sales tax, rounded down to the cent. Shop owners enter the base price (without tax); the system automatically calculates and adds the tax at checkout. The customer pays the full amount (base + tax); the tax is deducted before the shop owner is credited and goes to a separate "Government Budget" account that players cannot use. Refunds reverse the tax: the customer receives the full refunded amount (base + tax), the shop owner pays the base amount, and the government budget pays the tax portion back. The budget is allowed to go negative.
+
+### Pricing Example
+When you use `/zippay charge 100 store1`:
+- Base price you enter: $100.00
+- Tax calculated: $100.00 × 20% = $20.00
+- Total customer pays: $120.00
+- You receive: $100.00
+- Government receives: $20.00
 
 - `/zippay transfer <amount> <player>` sends money from your bank balance to another player's account (no tax). The recipient must already have a ZipBank account.
 
